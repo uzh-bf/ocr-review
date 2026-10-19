@@ -63,7 +63,7 @@ test('every OpenCodeReview job disables the CLI self-update', () => {
 test('attempts draft diagnostics upload even after startup failure', () => {
   const job = YAML.parse(
     fs.readFileSync(
-      path.join(__dirname, '../workflows/check-ocr-review.yml'),
+      path.join(__dirname, '../workflows/draft-review.yml'),
       'utf8'
     )
   ).jobs['ocr-review']
@@ -93,7 +93,7 @@ test('attempts draft diagnostics upload even after startup failure', () => {
 test('routes automatic drafts through the pinned adapter with OpenRouter max reasoning', () => {
   const job = YAML.parse(
     fs.readFileSync(
-      path.join(__dirname, '../workflows/check-ocr-review.yml'),
+      path.join(__dirname, '../workflows/draft-review.yml'),
       'utf8'
     )
   ).jobs['ocr-review']
@@ -128,4 +128,28 @@ test('routes automatic drafts through the pinned adapter with OpenRouter max rea
     for (const step of finalJob.steps ?? [])
       assert.equal(step.env?.OCR_ADAPTER_PROVIDER, undefined)
   }
+})
+
+test('README caller template matches the reusable draft workflow contract', () => {
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8')
+  const block = readme.match(/```yaml\n(name: OCR draft review[\s\S]*?)```/)
+  assert.ok(block, 'README must contain the draft caller template')
+  const caller = YAML.parse(block[1])
+  const reusable = YAML.parse(
+    fs.readFileSync(path.join(workflowDir, 'draft-review.yml'), 'utf8')
+  )
+  assert.ok(caller.on.pull_request_target)
+  const job = caller.jobs.draft
+  assert.match(
+    job.uses,
+    /^uzh-bf\/ocr-review\/\.github\/workflows\/draft-review\.yml@/
+  )
+  const declared = reusable.on.workflow_call.secrets
+  assert.deepEqual(Object.keys(job.secrets).sort(), Object.keys(declared).sort())
+  for (const [name, spec] of Object.entries(declared))
+    if (spec.required) assert.ok(job.secrets[name], `${name} is required`)
+  for (const [scope, level] of Object.entries(
+    reusable.jobs['ocr-review'].permissions
+  ))
+    assert.equal(caller.permissions[scope], level)
 })

@@ -873,8 +873,8 @@ test('grants clean evidence check access only to the required workflow jobs', ()
 test('pins trusted review code to the event workflow commit when the default branch moves', async () => {
   for (const workflow of ['../workflows/check-ocr-final-review.yml']) {
     const source = fs.readFileSync(path.join(__dirname, workflow), 'utf8')
-    assert.match(source, /^  pull_request_target:/m)
-    assert.match(source, /^  issue_comment:/m)
+    assert.match(source, /^  workflow_call:/m)
+    assert.doesNotMatch(source, /^  (?:pull_request_target|issue_comment):/m)
     assert.match(
       source,
       /GITHUB_WORKFLOW_SHA: \$\{\{ github\.workflow_sha \}\}/
@@ -1480,7 +1480,7 @@ test('uses one qualified canary and OCR release in both manual jobs', () => {
 
 test('draft context preserves the complete multiline workflow output', () => {
   const workflow = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-review.yml'),
+    path.join(__dirname, '../workflows/draft-review.yml'),
     'utf8'
   )
   const script = extractWorkflowStepScript(
@@ -1490,6 +1490,9 @@ test('draft context preserves the complete multiline workflow output', () => {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), 'ocr-context-output-')
   )
+  // The reusable workflow runs from the consumer checkout with the host
+  // scripts under .ocr-review.
+  fs.symlinkSync(path.join(__dirname, '../..'), path.join(directory, '.ocr-review'))
   const markerPath = path.join(directory, 'shell-executed-marker')
   const title = 'Synthetic context with "quotes", EOF and $(exit 1)'
   const body = [
@@ -1516,7 +1519,7 @@ test('draft context preserves the complete multiline workflow output', () => {
       }
       if (caseBody !== undefined) env.PR_BODY = caseBody
       const result = spawnSync('bash', ['-e', '-c', script], {
-        cwd: path.join(__dirname, '../..'),
+        cwd: directory,
         env,
         encoding: 'utf8',
       })

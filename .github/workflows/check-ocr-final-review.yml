@@ -1,18 +1,9 @@
 name: Final AI review
 
+# Dormant until it is ported to a reusable workflow: the host repository must
+# not run final reviews on its own pull requests.
 on:
-  pull_request_target:
-    types:
-      [
-        opened,
-        synchronize,
-        reopened,
-        closed,
-        ready_for_review,
-        converted_to_draft,
-      ]
-  issue_comment:
-    types: [created]
+  workflow_call:
 
 # Obsolete envelope runs must not pile up behind the status locks while newer
 # events for the same pull request already carry the authoritative state. PR
