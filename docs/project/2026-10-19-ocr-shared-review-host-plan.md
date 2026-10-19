@@ -68,10 +68,10 @@ Host: `node --test .github/scripts/*.test.*` and `actionlint`. Consumers: live P
 
 ## Progress
 
-- Execution mode: solo.
-- Slice 1 done: host created; verbatim import at `23ad70d`; config loader and context-root generalization at `d21dfd3`.
-- Slice 2 done: reusable `draft-review.yml` and README caller template at `4563f8a` (pushed to `main`).
-- Slice 3 open: catalyst caller in [uzh-bf/klicker-uzh-catalyst#116](https://github.com/uzh-bf/klicker-uzh-catalyst/pull/116). Live proof waits on org secrets for catalyst and a merge to `main`.
-- Slice 4 done locally: reusable single-PR `final-review.yml`; policy digest covers the caller workflow, `config.json` and the host commit; rules built from host defaults plus consumer filters; stack jobs dropped.
-- Next action: open the host PR for slice 4, then add the catalyst final-review caller and the gbl-uzh and thesis-platform callers.
-- Test delta: added config, context-root, caller-path, rules-merge and caller-template tests; adapted workflow-shape tests to the reusable layout; removed stack-job shape tests.
+- Execution mode: solo; final simplification and review were self-performed.
+- Slices 1–2 done on host `main` (`23ad70d`, `d21dfd3`, `4563f8a`): verbatim import, consumer config, reusable draft review.
+- Slice 4 done in [uzh-bf/ocr-review#1](https://github.com/uzh-bf/ocr-review/pull/1) (`6dcd396`, `72179a0`): reusable single-PR final review.
+- Slices 3 and 5 open as draft caller PRs: [uzh-bf/klicker-uzh-catalyst#116](https://github.com/uzh-bf/klicker-uzh-catalyst/pull/116), [uzh-bf/gbl-uzh#223](https://github.com/uzh-bf/gbl-uzh/pull/223), [uzh-bf/thesis-platform#204](https://github.com/uzh-bf/thesis-platform/pull/204). Their final callers pin `6dcd396` and must be repinned to the merged host `main` commit.
+- Evidence: local `pnpm test` 263 pass, 0 fail, 1 skipped. Hosted CI was queued behind an org-wide runner backlog. OCR 1.13.0 `--preview` with rules built for catalyst selected source files and excluded only tests and Markdown, and passed `validate-ocr-preview`. `plan-context` rendered a catalyst plan through the configured glob.
+- Blocked on the user: org secrets for the three consumers, then merging host #1 and the consumer PRs. The first live runs must confirm that `GITHUB_WORKFLOW_REF` names the caller file inside the called job.
+- Test delta: added config, context-root, caller-path, rules-merge, digest and caller-template tests; adapted workflow-shape tests; removed stack-job shape tests.
