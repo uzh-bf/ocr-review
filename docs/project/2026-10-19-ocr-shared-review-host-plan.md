@@ -54,6 +54,8 @@ Execution mode: solo (main session owns all slices; final simplification and rev
 - Incremental: a fix pushed after a reviewed head gets an incremental review, and a `config.json` change on `main` forces a full review.
 - Findings quality: the user judges the findings on these PRs as comparable to klicker-uzh's.
 
+The gbl-uzh and thesis-platform caller PRs also stay drafts until this gate passes (user decision, 2026-10-19).
+
 Later packages (not authorized here): klicker-uzh migration to the host, after the catalyst validation gate passes with stack review as an opt-in; further private and public repositories; making `final-ai-review` a required check.
 
 ### Test portfolio
