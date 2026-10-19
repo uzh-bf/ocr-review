@@ -11,14 +11,15 @@ const {
   MISTRAL_MODEL,
 } = require('./ocr-mistral-adapter.cjs')
 const { buildOCRResultDiagnostic } = require('./final-ai-review.js')
+const { loadReviewConfig } = require('./ocr-consumer-config.cjs')
 
 const DRAFT_MODEL = 'deepseek/deepseek-v4.1-flash-1017'
-const PUBLIC_DOC_LIBRARIES = [
-  '/vercel/next.js',
-  '/reactjs/react.dev',
-  '/prisma/web',
-  '/microsoft/typescript',
-]
+// The reviewer skill ships with these scripts, so a consuming repository
+// cannot replace the review procedure through its own files.
+const REVIEWER_SKILL_PATH = path.join(
+  __dirname,
+  '../../.agents/skills/ocr-reviewer/SKILL.md'
+)
 const PUBLISHER_SHA256 =
   '1d5decf90627353f1e7a2cad291d4ee4ec0a661d9724b93b2d7d5246f33462e2'
 
@@ -242,17 +243,8 @@ async function runDraftReview(options) {
     if (options.policy) {
       if (!/^[a-f0-9]{40}$/.test(options.policy))
         throw new Error('invalid_revision')
-      const skill = execFileSync(
-        'git',
-        ['show', `${options.policy}:.agents/skills/ocr-reviewer/SKILL.md`],
-        {
-          cwd: repo,
-          encoding: 'utf8',
-          timeout: 5000,
-          maxBuffer: 32768,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        }
-      )
+      const skill = fs.readFileSync(REVIEWER_SKILL_PATH, 'utf8')
+      const reviewConfig = loadReviewConfig(repo, options.policy)
       rulePath = path.join(home, 'review-rules.json')
       fs.writeFileSync(
         rulePath,
@@ -292,7 +284,8 @@ async function runDraftReview(options) {
             : undefined,
           advisorToken: advisor?.token,
           context7ApiKey: options.context7ApiKey,
-          publicLibraries: PUBLIC_DOC_LIBRARIES,
+          contextRoots: reviewConfig.context_roots,
+          publicLibraries: reviewConfig.docs_libraries,
           ...(options.context7FetchImpl
             ? { context7FetchImpl: options.context7FetchImpl }
             : {}),
@@ -340,7 +333,7 @@ async function runDraftReview(options) {
             throw new Error('tools_unavailable')
         }
         config.mcp_servers = {
-          klicker_review: {
+          ocr_review: {
             type: 'remote',
             url: tools.url,
             headers: { Authorization: 'Bearer ${OCR_REVIEW_TOOLS_TOKEN}' },

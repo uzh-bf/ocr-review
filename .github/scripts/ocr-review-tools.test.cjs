@@ -30,6 +30,7 @@ function fixture(t) {
     Array.from({ length: 120 }, (_, i) => `${i} ${'x'.repeat(100)}`).join('\n')
   )
   fs.writeFileSync(path.join(repo, 'source.js'), 'export const value = 1\n')
+  fs.writeFileSync(path.join(repo, 'AGENTS.md'), 'synthetic agent guide\n')
   git('add', '.')
   git('commit', '-m', 'chore: synthetic base')
   const policy = git('rev-parse', 'HEAD')
@@ -440,6 +441,22 @@ test('docs deadline expires as an upstream failure instead of a client cancellat
   assert.equal(broker.diagnostics().docs.failed, 1)
   assert.equal(broker.diagnostics().docs.last_failure, 'timeout')
   assert.equal(broker.diagnostics().docs.unknown_usage, 1)
+})
+
+test('MCP context honors configured file and directory roots', async (t) => {
+  const { tool } = await client(t, {
+    ...fixture(t),
+    contextRoots: ['AGENTS.md', 'docs/adr'],
+  })
+  const read = async (input) =>
+    (await tool('read_review_context', input)).result.content[0].text
+  assert.deepEqual(JSON.parse(await read({})).paths.sort(), [
+    'AGENTS.md',
+    'docs/adr/0001-contract.md',
+  ])
+  assert.match(JSON.parse(await read({ path: 'AGENTS.md' })).text, /agent guide/)
+  assert.equal(await read({ path: 'docs/contract.md' }), 'invalid_source')
+  assert.equal(await read({ path: 'docs' }), 'invalid_source')
 })
 
 test('MCP context reads trusted Git content and rejects traversal, symlinks and unauthorized requests', async (t) => {

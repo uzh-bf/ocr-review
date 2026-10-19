@@ -3,6 +3,7 @@
 const http = require('node:http')
 const crypto = require('node:crypto')
 const { execFileSync } = require('node:child_process')
+const { DEFAULTS, isContextPath } = require('./ocr-consumer-config.cjs')
 
 const RANGE_SCHEMA = {
   type: 'object',
@@ -136,19 +137,13 @@ function git(repo, args, maxBuffer = 524288) {
     throw failure('source_unavailable')
   }
 }
-function readRange(repo, revision, input, trusted) {
+function readRange(repo, revision, input, contextRoots) {
   if (
     !keys(input, ['path', 'start_line', 'end_line']) ||
     !validPath(input.path)
   )
     throw failure('invalid_source')
-  if (
-    trusted &&
-    !(
-      /^docs\/.+\.md$/.test(input.path) ||
-      /^\.agents\/skills\/[\w-]+\/.+\.md$/.test(input.path)
-    )
-  )
+  if (contextRoots && !isContextPath(contextRoots, input.path))
     throw failure('invalid_source')
   const start = input.start_line ?? 1
   const end = input.end_line ?? start + 119
@@ -406,6 +401,7 @@ function normalizeDocs(payload, input) {
 
 async function startReviewTools(options) {
   const { repo, head, policy, advisorUrl, advisorToken } = options
+  const contextRoots = options.contextRoots ?? DEFAULTS.context_roots
   if (
     ![head, policy].every(
       (value) => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value)
@@ -627,7 +623,9 @@ async function startReviewTools(options) {
         if (
           directory &&
           (!validPath(directory) ||
-            !/^(?:docs|\.agents\/skills)(?:\/|$)/.test(directory))
+            !contextRoots.some(
+              (root) => directory === root || directory.startsWith(`${root}/`)
+            ))
         )
           throw failure('invalid_source')
         const paths = git(repo, [
@@ -636,14 +634,11 @@ async function startReviewTools(options) {
           '--name-only',
           policy,
           '--',
-          'docs',
-          '.agents/skills',
+          ...contextRoots,
         ])
           .trim()
           .split('\n')
-          .filter((value) =>
-            /^docs\/.+\.md$|^\.agents\/skills\/.+\.md$/.test(value)
-          )
+          .filter((value) => isContextPath(contextRoots, value))
         const entries = [
           ...new Set(
             paths
@@ -651,10 +646,15 @@ async function startReviewTools(options) {
                 (value) => !directory || value.startsWith(`${directory}/`)
               )
               .map((value) => {
-                if (!directory)
-                  return value.startsWith('docs/')
-                    ? `docs/${value.slice(5).split('/')[0]}`
-                    : `.agents/skills/${value.slice(15).split('/')[0]}`
+                if (!directory) {
+                  const root = contextRoots.find(
+                    (entry) =>
+                      value === entry || value.startsWith(`${entry}/`)
+                  )
+                  return value === root
+                    ? value
+                    : `${root}/${value.slice(root.length + 1).split('/')[0]}`
+                }
                 const remainder = value.slice(directory.length + 1)
                 return remainder.includes('/')
                   ? `${directory}/${remainder.split('/')[0]}`
@@ -663,7 +663,7 @@ async function startReviewTools(options) {
           ),
         ]
         result = { paths: entries.slice(0, 80), truncated: entries.length > 80 }
-      } else result = readRange(repo, policy, input, true)
+      } else result = readRange(repo, policy, input, contextRoots)
       state.context_reads += 1
       emit()
       return result
@@ -697,7 +697,7 @@ async function startReviewTools(options) {
       )
         throw failure('invalid_question')
       const context = input.context.map((range) =>
-        readRange(repo, head, range, false)
+        readRange(repo, head, range, null)
       )
       const body = {
         model: 'zai-glm-5-3',
@@ -822,7 +822,7 @@ async function startReviewTools(options) {
           ? rpc.params.protocolVersion
           : '2025-11-25',
         capabilities: { tools: {} },
-        serverInfo: { name: 'klicker-review', version: '1.0.0' },
+        serverInfo: { name: 'ocr-review', version: '1.0.0' },
       }
     } else if (rpc.method === 'ping') result = {}
     else if (rpc.method === 'tools/list') {
