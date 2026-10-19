@@ -45,7 +45,16 @@ Execution mode: solo (main session owns all slices; final simplification and rev
 4. **Final review reusable workflow.** `.github/workflows/final-review.yml` ported from the single-PR jobs of `check-ocr-final-review.yml` (`trusted_policy` through `finalize`, no stack jobs). Adapt trusted-commit and workflow-path verification to the caller/host pair. Acceptance: host tests for the adapted verification pass; on catalyst, `/final-review` produces an exact-head `final-ai-review` status and, when clean, the clean-evidence check.
 5. **Roll out to gbl-uzh and thesis-platform.** One draft caller PR per repo with config and rules (gbl-uzh targets `dev`; the PR body asks contributors to open drafts). Acceptance: one live review per repo after secrets exist there.
 
-Later packages (not authorized here): klicker-uzh migration to the host with stack review as an opt-in; further private and public repositories; making `final-ai-review` a required check.
+**Catalyst validation gate.** klicker-uzh does not migrate until catalyst passes every check below on live pull requests:
+
+- Draft review: two or more draft PRs touching source get a sticky summary for the exact head, with complete coverage. Advisor and Context7 counters show at least one completed call, and the cost summary renders.
+- Context: the reviewer reads catalyst's own `AGENTS.md`, `docs/adr` or `docs/project` through `read_review_context`.
+- Final review: `/final-review` on a ready PR posts a consolidated comment and an exact-head `final-ai-review` status. A clean run creates the clean-evidence check.
+- Trust: a new push resets the status to pending. A `/final-review` comment from a user without write access is ignored. Run logs show the caller path from `GITHUB_WORKFLOW_REF` and the scripts checked out from the pinned host commit.
+- Incremental: a fix pushed after a reviewed head gets an incremental review, and a `config.json` change on `main` forces a full review.
+- Findings quality: the user judges the findings on these PRs as comparable to klicker-uzh's.
+
+Later packages (not authorized here): klicker-uzh migration to the host, after the catalyst validation gate passes with stack review as an opt-in; further private and public repositories; making `final-ai-review` a required check.
 
 ### Test portfolio
 
