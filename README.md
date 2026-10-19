@@ -99,6 +99,11 @@ The final review's trusted policy is the caller workflow plus `config.json` at t
 | `plan_globs` | Plan files offered to the final review as context | none |
 | `include`, `exclude` | Path globs added to or removed from final-review scope | none |
 
+## Limitations
+
+- Stack review (`/final-review-stack`) from klicker-uzh is not exposed yet.
+- The `verify-clean-status` CLI in `final-ai-review.js` reproduces the policy digest only inside the workflow, where `GITHUB_WORKFLOW_REF` and `OCR_HOST_SHA` are set.
+
 ## Development
 
 ```bash

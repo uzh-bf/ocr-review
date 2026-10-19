@@ -3585,6 +3585,16 @@ async function verifyCurrentIndividualFinalReview({ repository, prNumber }) {
   }
 }
 
+// CLI commands run in the consumer checkout at its trusted default-branch
+// commit, never at the pull-request head.
+function loadTrustedReviewConfig(cwd = process.cwd()) {
+  const policy = execFileSync('git', ['rev-parse', 'HEAD'], {
+    cwd,
+    encoding: 'utf8',
+  }).trim()
+  return loadReviewConfig(cwd, policy)
+}
+
 function runCli() {
   const command = process.argv[2]
   if (command === 'configure-ocr') {
@@ -3664,11 +3674,6 @@ function runCli() {
     const outputPath = process.argv[3]
     if (!outputPath)
       throw new Error('Usage: final-ai-review.js build-rules <output-path>')
-    const cwd = process.cwd()
-    const policy = execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd,
-      encoding: 'utf8',
-    }).trim()
     const hostRules = JSON.parse(
       fs.readFileSync(
         path.join(__dirname, '../..', FINAL_REVIEW_RULES_PATH),
@@ -3677,7 +3682,7 @@ function runCli() {
     )
     fs.writeFileSync(
       outputPath,
-      JSON.stringify(buildReviewRules(hostRules, loadReviewConfig(cwd, policy))),
+      JSON.stringify(buildReviewRules(hostRules, loadTrustedReviewConfig())),
       { mode: 0o600 }
     )
     return
@@ -3690,16 +3695,11 @@ function runCli() {
         'Usage: final-ai-review.js plan-context <from-sha> <to-sha>'
       )
     }
-    const cwd = process.cwd()
-    const policy = execFileSync('git', ['rev-parse', 'HEAD'], {
-      cwd,
-      encoding: 'utf8',
-    }).trim()
     const context = buildPlanContext({
       from,
       to,
-      cwd,
-      globs: loadReviewConfig(cwd, policy).plan_globs,
+      cwd: process.cwd(),
+      globs: loadTrustedReviewConfig().plan_globs,
     })
     if (context) console.log(context)
     return
