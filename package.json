@@ -1,0 +1,15 @@
+{
+  "name": "@uzh-bf/ocr-review",
+  "private": true,
+  "license": "AGPL-3.0",
+  "scripts": {
+    "test": "node --test .github/scripts/*.test.js .github/scripts/*.test.cjs .github/open-code-review/qualification/*.test.js"
+  },
+  "devDependencies": {
+    "yaml": "~2.6.1"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.5.0"
+}
