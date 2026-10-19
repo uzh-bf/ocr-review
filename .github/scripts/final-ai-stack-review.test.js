@@ -438,7 +438,7 @@ test('accepts a trusted clean stack status without requiring a review body', asy
   ]
   state.workflowRun = {
     id: 700,
-    path: '.github/workflows/check-ocr-final-review.yml',
+    path: '.github/workflows/final-review.yml',
     event: 'issue_comment',
     head_branch: 'v3',
     head_sha: stackContext.sha,
@@ -1293,32 +1293,9 @@ test('authorizes only the verified top pull request', async () => {
   )
 })
 
-test('keeps actions read permission for stack revalidation', () => {
-  const workflow = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
-    'utf8'
-  )
-  for (const jobName of [
-    'initialize_stack',
-    'start_stack',
-    'review_stack',
-    'finalize_stack',
-  ]) {
-    const job =
-      workflow.match(
-        new RegExp(
-          `\\n {2}${jobName}:\\n([\\s\\S]*?)(?=\\n {2}[a-z][\\w-]*:\\n|$)`
-        )
-      )?.[1] ?? ''
-    const permissions =
-      job.match(/\n {4}permissions:\n([\s\S]*?)(?=\n {4}steps:\n|$)/)?.[1] ?? ''
-    assert.match(permissions, / {6}actions: read\n/)
-  }
-})
-
 test('uses GLM Flash for individual and cumulative stack review jobs', () => {
   const workflow = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
+    path.join(__dirname, '../workflows/final-review.yml'),
     'utf8'
   )
 
@@ -1327,108 +1304,34 @@ test('uses GLM Flash for individual and cumulative stack review jobs', () => {
   assert.doesNotMatch(workflow, /OCR_LLM_MODEL/)
 })
 
-test('retains only the rejected stack publisher inputs for one day', () => {
+test('checks policy out from the trusted commit and code from the pinned host', () => {
   const workflow = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
+    path.join(__dirname, '../workflows/final-review.yml'),
     'utf8'
   )
-  const stageStep = workflow.match(
-    /      - name: Stage rejected stack publisher inputs\n[\s\S]*?(?=\n      - name:)/
-  )?.[0]
-  const uploadStep = workflow.match(
-    /      - name: Upload rejected stack publisher inputs\n[\s\S]*?(?=\n      - name:|\n  finalize_stack:)/
-  )?.[0]
-
-  assert.ok(stageStep)
-  assert.ok(uploadStep)
-  assert.ok(
-    workflow.indexOf('Publish consolidated stack review') <
-      workflow.indexOf('Stage rejected stack publisher inputs')
-  )
-  assert.ok(
-    workflow.indexOf('Stage rejected stack publisher inputs') <
-      workflow.indexOf('Upload rejected stack publisher inputs')
-  )
-  assert.match(
-    stageStep,
-    /failure\(\)[\s\S]*steps\.code_review\.outputs\.validation_failure == 'true'[\s\S]*steps\.topology_review\.outcome == 'failure'[\s\S]*steps\.publish\.outcome == 'failure'/
-  )
-  assert.match(stageStep, /test -f "\$\{code_result\}"/)
-  assert.match(stageStep, /cp -- "\$\{code_result\}" "\$\{staging_dir\}\/"/)
-  assert.match(
-    stageStep,
-    /if \[\[ -f "\$\{topology_result\}" \]\]; then[\s\S]*cp -- "\$\{topology_result\}" "\$\{staging_dir\}\/"/
-  )
-  assert.match(stageStep, /mv -- "\$\{staging_dir\}" "\$\{artifact_dir\}"/)
-  assert.match(
-    uploadStep,
-    /failure\(\)[\s\S]*steps\.code_review\.outputs\.validation_failure == 'true'[\s\S]*steps\.topology_review\.outcome == 'failure'[\s\S]*steps\.publish\.outcome == 'failure'/
-  )
-  assert.match(
-    uploadStep,
-    /uses: actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4/
-  )
-  assert.match(
-    uploadStep,
-    /name: final-ai-stack-publisher-failure-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/
-  )
-  assert.match(
-    uploadStep,
-    /path: \$\{\{ runner\.temp \}\}\/final-ai-stack-publisher-failure/
-  )
-  assert.match(uploadStep, /if-no-files-found: error/)
-  assert.match(uploadStep, /retention-days: 1/)
+  assert.match(workflow, /trusted_policy:/u)
   assert.doesNotMatch(
-    `${stageStep}\n${uploadStep}`,
-    /stderr|config|manifest|ranges|\*/i
+    workflow,
+    /ref: \$\{\{ github\.(sha|event\.repository\.default_branch) \}\}/u
   )
-})
-
-test('checks trusted review code out from the default branch', () => {
-  for (const workflowName of [
-    'check-ocr-final-review.yml',
-    'check-ocr-final-review.yml',
-  ]) {
-    const workflow = fs.readFileSync(
-      path.join(__dirname, `../workflows/${workflowName}`),
-      'utf8'
-    )
-    assert.match(workflow, /trusted_policy:/u)
-    assert.doesNotMatch(
-      workflow,
-      /ref: \$\{\{ github\.(sha|event\.repository\.default_branch) \}\}/u
+  assert.doesNotMatch(workflow, /ref: \$\{\{ github\.event\.pull_request\.head/u)
+  const checkouts = workflow.match(
+    /uses: actions\/checkout@[^\n]+\n {8}with:\n(?: {10}.*\n)+/gu
+  )
+  assert.ok(checkouts.length > 0)
+  for (const checkout of checkouts) {
+    const host = /repository: \$\{\{ job\.workflow_repository \}\}/u.test(
+      checkout
     )
     assert.match(
-      workflow,
-      /ref: \$\{\{ needs\.trusted_policy\.outputs\.trusted_sha \}\}/u
+      checkout,
+      host
+        ? /ref: \$\{\{ needs\.trusted_policy\.outputs\.host_sha \}\}/u
+        : /ref: \$\{\{ needs\.authorize\.outputs\.trusted_sha \}\}/u
     )
-    assert.match(
-      workflow,
-      /ref: \$\{\{ needs\.authorize\.outputs\.trusted_sha \}\}/u
-    )
-    assert.match(workflow, /git rev-parse HEAD/u)
   }
-})
-
-test('anchors every stack review consumer to the frozen manifest digest', () => {
-  const workflow = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
-    'utf8'
-  )
-  assert.equal(
-    workflow.match(
-      /MANIFEST_DIGEST: \$\{\{ needs\.start_stack\.outputs\.manifest_digest \}\}/g
-    )?.length,
-    3
-  )
-  assert.match(
-    workflow,
-    /expectedManifestDigest: process\.env\.MANIFEST_DIGEST/
-  )
-  assert.match(
-    workflow,
-    /"\$\{MANIFEST_PATH\}" "\$\{CODE_RESULT_PATH\}" "\$\{TOPOLOGY_RESULT_PATH\}" \\\n\s+"\$\{MANIFEST_DIGEST\}"/
-  )
+  assert.match(workflow, /git rev-parse HEAD/u)
+  assert.match(workflow, /git -C \.ocr-review rev-parse HEAD/u)
 })
 
 test('does not publish stack status for ordinary PRs without stale stack evidence', async () => {
@@ -1599,7 +1502,7 @@ test('preserves comment-free clean evidence across unrelated default-base advanc
   ]
   state.workflowRun = {
     id: 700,
-    path: '.github/workflows/check-ocr-final-review.yml',
+    path: '.github/workflows/final-review.yml',
     event: 'issue_comment',
     head_branch: 'v3',
     head_sha: originalContext.sha,
@@ -1688,7 +1591,7 @@ test('preserves stack evidence across base advancement of a consolidation root',
   state.comments = []
   state.workflowRun = {
     id: 700,
-    path: '.github/workflows/check-ocr-final-review.yml',
+    path: '.github/workflows/final-review.yml',
     event: 'issue_comment',
     head_branch: 'v3',
     head_sha: 'a'.repeat(40),
@@ -1804,7 +1707,7 @@ test('preserves current stack evidence across unrelated default-base advancement
   state.comments = []
   state.workflowRun = {
     id: 700,
-    path: '.github/workflows/check-ocr-final-review.yml',
+    path: '.github/workflows/final-review.yml',
     event: 'issue_comment',
     head_branch: 'v3',
     head_sha: 'a'.repeat(40),
@@ -2461,7 +2364,7 @@ test('attests a bounded repaired top layer from a trusted stack disposition', as
   ]
   state.workflowRun = {
     id: 700,
-    path: '.github/workflows/check-ocr-final-review.yml',
+    path: '.github/workflows/final-review.yml',
     event: 'issue_comment',
     head_branch: 'v3',
     head_sha: 'a'.repeat(40),
@@ -2510,9 +2413,8 @@ test('attests a bounded repaired top layer from a trusted stack disposition', as
   })
   assert.equal(deferredPlan.mode, 'incremental')
 
-  state.policyFiles[
-    '.github/open-code-review/final-stack-topology-rules.json'
-  ] = 'changed trusted topology policy'
+  state.policyFiles['.github/open-code-review/config.json'] =
+    'changed trusted review config'
   const changedPolicyPlan = await buildStackReviewPlan({
     github,
     context: context(),
@@ -2523,9 +2425,7 @@ test('attests a bounded repaired top layer from a trusted stack disposition', as
     }),
   })
   assert.equal(changedPolicyPlan.mode, 'full')
-  delete state.policyFiles[
-    '.github/open-code-review/final-stack-topology-rules.json'
-  ]
+  delete state.policyFiles['.github/open-code-review/config.json']
 
   pulls[14].head.ref = 'rs/layer-4-renamed'
   const driftPlan = await buildStackReviewPlan({
@@ -2652,7 +2552,7 @@ test('attests bounded repairs across changed lower stack layers', async () => {
         : state.comments
   state.workflowRun = {
     id: 700,
-    path: '.github/workflows/check-ocr-final-review.yml',
+    path: '.github/workflows/final-review.yml',
     event: 'issue_comment',
     head_branch: 'v3',
     head_sha: 'a'.repeat(40),

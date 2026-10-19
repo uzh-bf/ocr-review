@@ -25,6 +25,8 @@ const {
   buildMistralToolCanaryRequest,
   buildReviewPlan,
   buildPlanContext,
+  buildReviewRules,
+  callerWorkflowPath,
   buildReviewBackground,
   createGhGithub,
   decodeMetadata,
@@ -308,6 +310,7 @@ function executeExtractedOCRAttempt({
     OCR_VERSION_STATUS: String(versionStatus),
     OCR_VERSION_STDERR: 'OCR_VERSION_STDERR_SENTINEL',
     OUTPUT_PATH: outputPath,
+    RULES_PATH: '.github/open-code-review/final-review-rules.json',
     STDERR_PATH: stderrPath,
     GITHUB_STEP_SUMMARY: summaryPath,
     GITHUB_OUTPUT: githubOutputPath,
@@ -329,6 +332,7 @@ function executeExtractedOCRAttempt({
     '  "$@"',
     '}',
     'node() {',
+    '  set -- "${1#.ocr-review/}" "${@:2}"',
     '  if [[ "$1" == .github/scripts/final-ai-review.js && "$2" == validate-ocr-preview ]]; then',
     '    command node "$@" || return',
     '    printf "coverage checked\\n" >>"${OCR_CALLS_PATH}"',
@@ -416,15 +420,13 @@ function executeExtractedOCRAttempt({
   return result
 }
 
-test('executes both workflow OCR command boundaries with pinned version diagnostics', () => {
+test('executes the workflow OCR command boundary with pinned version diagnostics', () => {
   const workflow = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
+    path.join(__dirname, '../workflows/final-review.yml'),
     'utf8'
   )
   const individualFrom = '1'.repeat(40)
   const individualTo = '2'.repeat(40)
-  const stackFrom = '3'.repeat(40)
-  const stackTo = '4'.repeat(40)
   const forms = [
     {
       name: 'individual full',
@@ -448,39 +450,6 @@ test('executes both workflow OCR command boundaries with pinned version diagnost
       reviewTo: individualTo,
       sessionId: 'individual-session',
     },
-    {
-      name: 'stack full',
-      jobName: 'review_stack',
-      stepName: 'Run cumulative code review',
-      kind: 'stack',
-      budget: 20000000,
-      timeout: 30,
-      reviewFrom: stackFrom,
-      reviewTo: stackTo,
-      sessionId: '',
-    },
-    {
-      name: 'stack range',
-      jobName: 'review_stack',
-      stepName: 'Run cumulative code review',
-      kind: 'stack',
-      budget: 750000,
-      timeout: 30,
-      reviewFrom: stackFrom,
-      reviewTo: stackTo,
-      sessionId: '',
-    },
-    {
-      name: 'stack resume',
-      jobName: 'review_stack',
-      stepName: 'Run cumulative code review',
-      kind: 'stack',
-      budget: 125000,
-      timeout: 30,
-      reviewFrom: stackFrom,
-      reviewTo: stackTo,
-      sessionId: 'stack-session',
-    },
   ]
 
   const runCase = (form, options = {}) =>
@@ -502,7 +471,7 @@ test('executes both workflow OCR command boundaries with pinned version diagnost
     assertReviewAttempt(result, form, 0)
   }
 
-  for (const form of [forms[0], forms[2]]) {
+  for (const form of [forms[0]]) {
     const previewFailure = runCase(form, { previewStatus: 124 })
     assert.equal(previewFailure.process.status, 1)
     assert.match(previewFailure.process.stderr, /coverage preview failed/)
@@ -619,8 +588,47 @@ test('adds bounded description data without hidden comments or image embeds', ()
   )
 })
 
+test('derives the caller workflow path from the runner workflow ref', () => {
+  const env = (ref) => ({
+    GITHUB_REPOSITORY: 'uzh-bf/consumer',
+    GITHUB_WORKFLOW_REF: ref,
+  })
+  assert.equal(
+    callerWorkflowPath(
+      env('uzh-bf/consumer/.github/workflows/ocr-final-review.yml@refs/heads/main')
+    ),
+    '.github/workflows/ocr-final-review.yml'
+  )
+  for (const ref of [
+    'uzh-bf/other/.github/workflows/ocr-final-review.yml@refs/heads/main',
+    'uzh-bf/consumer/.github/workflows/../x.yml@refs/heads/main',
+    'uzh-bf/consumer/scripts/x.yml@refs/heads/main',
+    '',
+  ])
+    assert.equal(
+      callerWorkflowPath(env(ref)),
+      '.github/workflows/final-review.yml'
+    )
+})
+
+test('review rules keep host instructions and merge consumer path filters', () => {
+  const host = {
+    rules: [{ path: '**/*', rule: 'host rule', merge_system_rule: true }],
+    include: [],
+    exclude: ['**/*.md', '**/*.test.*'],
+  }
+  const rules = buildReviewRules(host, {
+    include: ['e2e/**/*.ts'],
+    exclude: ['**/*.md', 'generated/**'],
+  })
+  assert.deepEqual(rules.rules, host.rules)
+  assert.deepEqual(rules.include, ['e2e/**/*.ts'])
+  assert.deepEqual(rules.exclude, ['**/*.md', '**/*.test.*', 'generated/**'])
+})
+
 test('plan context carries changed plans from the head commit within one budget', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'final-review-plan-'))
+  const globs = ['project/**/*-plan.md']
   const git = (...args) => {
     const result = spawnSync('git', args, { cwd, encoding: 'utf8' })
     assert.equal(result.status, 0, result.stderr)
@@ -648,7 +656,7 @@ test('plan context carries changed plans from the head commit within one budget'
     write('project/2026-01-01-removed-plan.md', 'Removed plan.')
     write('project/2026-01-02-untouched-plan.md', 'Untouched plan.')
     const from = commit()
-    assert.equal(buildPlanContext({ from, to: from, cwd }), '')
+    assert.equal(buildPlanContext({ from, to: from, cwd, globs }), '')
 
     git('rm', '-q', 'project/2026-01-01-removed-plan.md')
     write('project/2026-01-15-oversized-plan.md', 'x'.repeat(300 * 1024))
@@ -663,7 +671,7 @@ test('plan context carries changed plans from the head commit within one budget'
     const to = commit()
     write('project/2026-02-01-main-plan.md', 'Uncommitted edit.')
 
-    const lines = buildPlanContext({ from, to, cwd }).split('\n')
+    const lines = buildPlanContext({ from, to, cwd, globs }).split('\n')
     assert.equal(lines.length, 3)
     const { plans } = JSON.parse(lines[2])
     assert.deepEqual(
@@ -696,7 +704,7 @@ test('plan context carries changed plans from the head commit within one budget'
     write('project/2026-05-01-crafted-plan.md', runs.join(' '))
     const crafted = commit()
     const startedAt = Date.now()
-    const craftedContext = buildPlanContext({ from: to, to: crafted, cwd })
+    const craftedContext = buildPlanContext({ from: to, to: crafted, cwd, globs })
     assert.ok(Date.now() - startedAt < 2_000)
     assert.equal(
       JSON.parse(craftedContext.split('\n')[2]).plans.find(
@@ -733,37 +741,28 @@ test('bounds normalization work for unmatched description delimiters', () => {
   assert.equal(result.status, 0, result.stderr)
 })
 
-test('bounds individual and stack review retries, tokens, and runtime', () => {
+test('bounds individual review retries, tokens, and runtime', () => {
   const source = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
+    path.join(__dirname, '../workflows/final-review.yml'),
     'utf8'
   )
 
   assert.equal(source.match(/--timeout 45/g)?.length, 1)
-  assert.equal(source.match(/--timeout 30/g)?.length, 1)
-  assert.equal(source.match(/plan-ocr-resume/g)?.length, 2)
-  assert.equal(source.match(/merge-ocr-resume/g)?.length, 2)
+  assert.equal(source.match(/plan-ocr-resume/g)?.length, 1)
+  assert.equal(source.match(/merge-ocr-resume/g)?.length, 1)
   assert.match(source, /run_ocr_attempt "\$\{RESULT_PATH\}" 10000000/)
-  assert.match(source, /"\$\{REVIEW_FROM\}" "\$\{HEAD_SHA\}" 20000000/)
-  assert.match(source, /resume_partial_result[\s\S]*750000 "\$\{RANGE_PATH\}"/)
   assert.equal(
     source.match(/steps:\n {6}- name: Record review job start/g)?.length,
-    2
+    1
   )
   assert.equal(
     source.match(
       /REVIEW_JOB_STARTED_AT: \$\{\{ steps\.job_start\.outputs\.epoch \}\}/g
     )?.length,
-    2
+    1
   )
   assert.match(source, /now \+ 2760 > REVIEW_JOB_STARTED_AT \+ 4800/)
-  assert.match(source, /now \+ 1860 > REVIEW_JOB_STARTED_AT \+ 4200/)
-  assert.equal(source.match(/timeout-minutes: 90/g)?.length, 2)
-  assert.equal(source.match(/RESUME_USED=true/g)?.length, 1)
-  assert.match(
-    source,
-    /Only one partial OCR result may be resumed per stack job/
-  )
+  assert.equal(source.match(/timeout-minutes: 90/g)?.length, 1)
 })
 
 test('validates one OCR preview selection and refuses oversized exclusions', () => {
@@ -853,7 +852,7 @@ test('accepts only the exact command and calculated write permissions', () => {
 
 test('grants clean evidence check access only to the required workflow jobs', () => {
   const workflow = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
+    path.join(__dirname, '../workflows/final-review.yml'),
     'utf8'
   )
   const permissionsFor = (jobName) =>
@@ -871,7 +870,7 @@ test('grants clean evidence check access only to the required workflow jobs', ()
 })
 
 test('pins trusted review code to the event workflow commit when the default branch moves', async () => {
-  for (const workflow of ['../workflows/check-ocr-final-review.yml']) {
+  for (const workflow of ['../workflows/final-review.yml']) {
     const source = fs.readFileSync(path.join(__dirname, workflow), 'utf8')
     assert.match(source, /^  workflow_call:/m)
     assert.doesNotMatch(source, /^  (?:pull_request_target|issue_comment):/m)
@@ -944,18 +943,15 @@ test('queues and serializes every final-review status writer', () => {
       new RegExp(`\\n {2}${name}:\\n([\\s\\S]*?)(?=\\n {2}[a-z][\\w-]*:\\n|$)`)
     )?.[1] ?? ''
 
-  for (const workflowName of ['check-ocr-final-review.yml']) {
+  for (const workflowName of ['final-review.yml']) {
     const source = fs.readFileSync(
       path.join(__dirname, `../workflows/${workflowName}`),
       'utf8'
     )
     const statusWriters = [
       ['initialize', 'resolve_lock'],
-      ['initialize_stack', 'resolve_lock'],
       ['start', 'authorize'],
       ['finalize', 'authorize'],
-      ['start_stack', 'authorize_stack'],
-      ['finalize_stack', 'authorize_stack'],
     ]
     for (const [jobName, dependency] of statusWriters) {
       const block = job(source, jobName)
@@ -982,7 +978,7 @@ test('queues and serializes every final-review status writer', () => {
     }
   }
   const individualSource = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
+    path.join(__dirname, '../workflows/final-review.yml'),
     'utf8'
   )
   assert.match(
@@ -992,7 +988,7 @@ test('queues and serializes every final-review status writer', () => {
 })
 
 test('propagates a clean publication result to final status', () => {
-  for (const workflowName of ['check-ocr-final-review.yml']) {
+  for (const workflowName of ['final-review.yml']) {
     const source = fs.readFileSync(
       path.join(__dirname, `../workflows/${workflowName}`),
       'utf8'
@@ -1010,7 +1006,7 @@ test('propagates a clean publication result to final status', () => {
       /CLEAN_REVIEW: \$\{\{ needs\.review\.outputs\.clean_review \|\| 'false' \}\}/
     )
     assert.match(source, /cleanReview: process\.env\.CLEAN_REVIEW/)
-    if (workflowName === 'check-ocr-final-review.yml') {
+    if (workflowName === 'final-review.yml') {
       assert.match(source, /name: Finalize failure fallback/)
       assert.match(source, /finalizeFinalReviewFailure/)
     }
@@ -1211,7 +1207,7 @@ test('writes secretless max-reasoning OCR config with mode 0600', () => {
 })
 
 function toolCanaryResponse({
-  args = { marker: 'KLICKER_FINAL_REVIEW_TOOL_CANARY' },
+  args = { marker: 'OCR_FINAL_REVIEW_TOOL_CANARY' },
   model = FINAL_REVIEW_MODEL,
   provider = 'Mistral',
   toolName = 'final_review_probe',
@@ -1329,7 +1325,7 @@ test('rejects malformed successful Mistral tool responses', async () => {
     { model: FINAL_REVIEW_MODEL, choices: [] },
     toolCanaryResponse({ args: { marker: 'wrong' } }),
     toolCanaryResponse({
-      args: { marker: 'KLICKER_FINAL_REVIEW_TOOL_CANARY', extra: true },
+      args: { marker: 'OCR_FINAL_REVIEW_TOOL_CANARY', extra: true },
     }),
     toolCanaryResponse({ model: 'unexpected/model' }),
     toolCanaryResponse({ toolName: 'unexpected_tool' }),
@@ -1440,9 +1436,9 @@ test('suppresses Mistral tool-canary error bodies and credentials', async () => 
   )
 })
 
-test('uses one qualified canary and OCR release in both manual jobs', () => {
+test('uses one qualified canary and OCR release in the manual review job', () => {
   const source = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
+    path.join(__dirname, '../workflows/final-review.yml'),
     'utf8'
   )
   const job = (name) =>
@@ -1452,10 +1448,10 @@ test('uses one qualified canary and OCR release in both manual jobs', () => {
 
   assert.equal(
     source.match(/@alibaba-group\/open-code-review@1\.13\.0/g)?.length,
-    2
+    1
   )
-  assert.equal(source.match(/verify-mistral-tools/g)?.length, 2)
-  assert.equal(source.match(/--effort low/g)?.length, 2)
+  assert.equal(source.match(/verify-mistral-tools/g)?.length, 1)
+  assert.equal(source.match(/--effort low/g)?.length, 1)
   assert.doesNotMatch(source, /@alibaba-group\/open-code-review@1\.9\.10/)
   assert.doesNotMatch(source, /ocr llm test/)
   assert.doesNotMatch(source, /OCR_CONFIG_PATH/)
@@ -1464,7 +1460,7 @@ test('uses one qualified canary and OCR release in both manual jobs', () => {
     ['OCR_LLM_TIMEOUT']
   )
 
-  for (const name of ['review', 'review_stack']) {
+  for (const name of ['review']) {
     const block = job(name)
     assert.match(block, /runs-on: ubuntu-latest/)
     assert.ok(
@@ -1546,7 +1542,7 @@ test('draft context preserves the complete multiline workflow output', () => {
 
 test('uses the OCR runtime config path for both preflight and review', () => {
   const workflow = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
+    path.join(__dirname, '../workflows/final-review.yml'),
     'utf8'
   )
 
@@ -1554,17 +1550,19 @@ test('uses the OCR runtime config path for both preflight and review', () => {
   assert.equal(
     workflow.match(/test -s "\$\{HOME\}\/\.opencodereview\/config\.json"/g)
       ?.length,
-    2
+    1
   )
   assert.equal(
-    workflow.match(/node \.github\/scripts\/final-ai-review\.js configure-ocr/g)
-      ?.length,
-    2
+    workflow.match(
+      /node \.ocr-review\/\.github\/scripts\/final-ai-review\.js configure-ocr/g
+    )?.length,
+    1
   )
   assert.equal(
-    workflow.match(/node \.github\/scripts\/final-ai-review\.js cleanup-ocr/g)
-      ?.length,
-    2
+    workflow.match(
+      /node \.ocr-review\/\.github\/scripts\/final-ai-review\.js cleanup-ocr/g
+    )?.length,
+    1
   )
 })
 
@@ -2551,7 +2549,7 @@ test('scopes status locks to a verified native stack when available', async () =
 
 test('retains only the rejected individual publisher input for one day', () => {
   const workflow = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
+    path.join(__dirname, '../workflows/final-review.yml'),
     'utf8'
   )
   const step = workflow.match(
@@ -2586,12 +2584,11 @@ test('retains only the rejected individual publisher input for one day', () => {
 
 test('suppresses raw OCR output while retaining rejected validation inputs', () => {
   const workflow = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
+    path.join(__dirname, '../workflows/final-review.yml'),
     'utf8'
   )
   for (const name of [
     'Summarize final review failure output',
-    'Summarize cumulative review failure output',
   ]) {
     const step = workflow.match(
       new RegExp(`      - name: ${name}\\n[\\s\\S]*?(?=\\n      - name:)`)
@@ -2992,7 +2989,7 @@ test('bounds diagnostic counters to allowlisted classes and safe counts', () => 
 
 test('runs OCR validation after resume and gates individual publication', () => {
   const workflow = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
+    path.join(__dirname, '../workflows/final-review.yml'),
     'utf8'
   )
   const runIndex = workflow.indexOf('      - name: Run final review')
@@ -3019,7 +3016,7 @@ test('runs OCR validation after resume and gates individual publication', () => 
   assert.match(validationStep, /if: steps\.run_review\.outcome == 'success'/)
   assert.match(
     validationStep,
-    /node \.github\/scripts\/final-ai-review\.js validate-ocr-result "\$\{RESULT_PATH\}"/
+    /node \.ocr-review\/\.github\/scripts\/final-ai-review\.js validate-ocr-result "\$\{RESULT_PATH\}"/
   )
 
   const rejectedSummaryStep = workflow.slice(rejectedSummaryIndex, cleanupIndex)
@@ -3237,7 +3234,7 @@ test('accepts a trusted clean status without requiring a review body', async () 
   ]
   state.workflowRun = {
     id: 123,
-    path: '.github/workflows/check-ocr-final-review.yml',
+    path: '.github/workflows/final-review.yml',
     event: 'issue_comment',
     head_branch: 'v3',
     head_sha: context.sha,
@@ -3610,7 +3607,7 @@ test('preserves comment-free individual clean evidence across unrelated default-
   ]
   state.workflowRun = {
     id: 123,
-    path: '.github/workflows/check-ocr-final-review.yml',
+    path: '.github/workflows/final-review.yml',
     event: 'issue_comment',
     head_branch: 'v3',
     head_sha: context.sha,
@@ -3722,7 +3719,7 @@ test('rejects tampered individual clean path evidence', async () => {
   ]
   state.workflowRun = {
     id: 123,
-    path: '.github/workflows/check-ocr-final-review.yml',
+    path: '.github/workflows/final-review.yml',
     event: 'issue_comment',
     head_branch: 'v3',
     head_sha: context.sha,
@@ -4230,7 +4227,7 @@ test('selects incremental attestation only for bounded repaired changes', async 
   ]
   state.workflowRun = {
     id: 123,
-    path: '.github/workflows/check-ocr-final-review.yml',
+    path: '.github/workflows/final-review.yml',
     event: 'issue_comment',
     head_branch: 'v3',
     head_sha: 'd'.repeat(40),
@@ -4395,8 +4392,8 @@ test('selects incremental attestation only for bounded repaired changes', async 
   state.rules = '{"rules":[]}'
 
   for (const policyPath of [
-    '.github/workflows/check-ocr-final-review.yml',
-    '.github/scripts/final-ai-review-shared.js',
+    '.github/workflows/final-review.yml',
+    '.github/open-code-review/config.json',
   ]) {
     state.policyFiles[policyPath] = 'changed trusted policy'
     const changedPolicy = await buildReviewPlan({
@@ -4406,6 +4403,20 @@ test('selects incremental attestation only for bounded repaired changes', async 
     })
     assert.equal(changedPolicy.mode, 'full')
     delete state.policyFiles[policyPath]
+  }
+
+  const previousHostSha = process.env.OCR_HOST_SHA
+  process.env.OCR_HOST_SHA = 'c'.repeat(40)
+  try {
+    const changedHost = await buildReviewPlan({
+      github,
+      context,
+      pull: state.pull,
+    })
+    assert.equal(changedHost.mode, 'full')
+  } finally {
+    if (previousHostSha === undefined) delete process.env.OCR_HOST_SHA
+    else process.env.OCR_HOST_SHA = previousHostSha
   }
 
   state.pull = {

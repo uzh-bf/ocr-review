@@ -45,7 +45,18 @@ Execution mode: solo (main session owns all slices; final simplification and rev
 4. **Final review reusable workflow.** `.github/workflows/final-review.yml` ported from the single-PR jobs of `check-ocr-final-review.yml` (`trusted_policy` through `finalize`, no stack jobs). Adapt trusted-commit and workflow-path verification to the caller/host pair. Acceptance: host tests for the adapted verification pass; on catalyst, `/final-review` produces an exact-head `final-ai-review` status and, when clean, the clean-evidence check.
 5. **Roll out to gbl-uzh and thesis-platform.** One draft caller PR per repo with config and rules (gbl-uzh targets `dev`; the PR body asks contributors to open drafts). Acceptance: one live review per repo after secrets exist there.
 
-Later packages (not authorized here): klicker-uzh migration to the host with stack review as an opt-in; further private and public repositories; making `final-ai-review` a required check.
+**Catalyst validation gate.** klicker-uzh does not migrate until catalyst passes every check below on live pull requests:
+
+- Draft review: two or more draft PRs touching source get a sticky summary for the exact head, with complete coverage. Advisor and Context7 counters show at least one completed call, and the cost summary renders.
+- Context: the reviewer reads catalyst's own `AGENTS.md`, `docs/adr` or `docs/project` through `read_review_context`.
+- Final review: `/final-review` on a ready PR posts a consolidated comment and an exact-head `final-ai-review` status. A clean run creates the clean-evidence check.
+- Trust: a new push resets the status to pending. A `/final-review` comment from a user without write access is ignored. Run logs show the caller path from `GITHUB_WORKFLOW_REF` and the scripts checked out from the pinned host commit.
+- Incremental: a fix pushed after a reviewed head gets an incremental review, and a `config.json` change on `main` forces a full review.
+- Findings quality: the user judges the findings on these PRs as comparable to klicker-uzh's.
+
+The gbl-uzh and thesis-platform caller PRs also stay drafts until this gate passes (user decision, 2026-10-19).
+
+Later packages (not authorized here): klicker-uzh migration to the host, after the catalyst validation gate passes with stack review as an opt-in; further private and public repositories; making `final-ai-review` a required check.
 
 ### Test portfolio
 
@@ -68,5 +79,10 @@ Host: `node --test .github/scripts/*.test.*` and `actionlint`. Consumers: live P
 
 ## Progress
 
-- Status: plan drafted, awaiting approval.
-- Next action: on approval, create `uzh-bf/ocr-review` and start slice 1.
+- Execution mode: solo; final simplification and review were self-performed.
+- Slices 1–2 done on host `main` (`23ad70d`, `d21dfd3`, `4563f8a`): verbatim import, consumer config, reusable draft review.
+- Slice 4 done in [uzh-bf/ocr-review#1](https://github.com/uzh-bf/ocr-review/pull/1) (`6dcd396`, `72179a0`): reusable single-PR final review.
+- Slices 3 and 5 open as draft caller PRs: [uzh-bf/klicker-uzh-catalyst#116](https://github.com/uzh-bf/klicker-uzh-catalyst/pull/116), [uzh-bf/gbl-uzh#223](https://github.com/uzh-bf/gbl-uzh/pull/223), [uzh-bf/thesis-platform#204](https://github.com/uzh-bf/thesis-platform/pull/204). Their final callers pin `6dcd396` and must be repinned to the merged host `main` commit.
+- Evidence: local `pnpm test` 263 pass, 0 fail, 1 skipped. Hosted CI was queued behind an org-wide runner backlog. OCR 1.13.0 `--preview` with rules built for catalyst selected source files and excluded only tests and Markdown, and passed `validate-ocr-preview`. `plan-context` rendered a catalyst plan through the configured glob.
+- Blocked on the user: org secrets for the three consumers, then merging host #1 and the consumer PRs. The first live runs must confirm that `GITHUB_WORKFLOW_REF` names the caller file inside the called job.
+- Test delta: added config, context-root, caller-path, rules-merge, digest and caller-template tests; adapted workflow-shape tests; removed stack-job shape tests.

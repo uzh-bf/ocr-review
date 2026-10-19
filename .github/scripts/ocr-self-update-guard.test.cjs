@@ -119,7 +119,7 @@ test('routes automatic drafts through the pinned adapter with OpenRouter max rea
   assert.equal(summary.if, 'always()')
   const manual = YAML.parse(
     fs.readFileSync(
-      path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
+      path.join(__dirname, '../workflows/final-review.yml'),
       'utf8'
     )
   )
@@ -152,4 +152,32 @@ test('README caller template matches the reusable draft workflow contract', () =
     reusable.jobs['ocr-review'].permissions
   ))
     assert.equal(caller.permissions[scope], level)
+})
+
+test('README final caller template matches the reusable final workflow contract', () => {
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8')
+  const block = readme.match(/```yaml\n(name: OCR final review[\s\S]*?)```/)
+  assert.ok(block, 'README must contain the final caller template')
+  const caller = YAML.parse(block[1])
+  const reusable = YAML.parse(
+    fs.readFileSync(path.join(workflowDir, 'final-review.yml'), 'utf8')
+  )
+  assert.ok(caller.on.pull_request_target && caller.on.issue_comment)
+  assert.equal(caller.concurrency['cancel-in-progress'], true)
+  const job = caller.jobs.final
+  assert.match(
+    job.uses,
+    /^uzh-bf\/ocr-review\/\.github\/workflows\/final-review\.yml@/
+  )
+  assert.deepEqual(
+    Object.keys(job.secrets).sort(),
+    Object.keys(reusable.on.workflow_call.secrets).sort()
+  )
+  const rank = { read: 1, write: 2 }
+  for (const reusableJob of Object.values(reusable.jobs))
+    for (const [scope, level] of Object.entries(reusableJob.permissions ?? {}))
+      assert.ok(
+        rank[caller.permissions[scope]] >= rank[level],
+        `caller must grant ${scope}: ${level}`
+      )
 })
