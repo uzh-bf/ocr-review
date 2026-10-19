@@ -788,12 +788,11 @@ test('reported-response cost preserves strict totals and refuses every other cov
 
 test('manual workflows reconcile shared stage receipts against independent step outputs', () => {
   const source = fs.readFileSync(
-    path.join(__dirname, '../workflows/check-ocr-final-review.yml'),
+    path.join(__dirname, '../workflows/final-review.yml'),
     'utf8'
   )
   for (const [job, stepId, stageArgs] of [
     ['review', 'run_review', ['preflight', 'adapter']],
-    ['review_stack', 'code_review', ['preflight', 'adapter', 'topology']],
   ]) {
     const block = source.match(
       new RegExp(`\\n  ${job}:\\n([\\s\\S]*?)(?=\\n  [a-z][\\w-]*:\\n|$)`)

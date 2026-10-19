@@ -22,6 +22,10 @@ const {
   MAX_COMPARE_FILES,
   resolveNativeStackMembership,
 } = require('./native-stack.js')
+const {
+  CONFIG_PATH: REVIEW_CONFIG_PATH,
+  loadReviewConfig,
+} = require('./ocr-consumer-config.cjs')
 
 const FINAL_REVIEW_COMMAND = '/final-review'
 const FINAL_REVIEW_CONTEXT = 'final-ai-review'
@@ -35,8 +39,22 @@ const FINAL_REVIEW_BOT = 'github-actions[bot]'
 const FINAL_REVIEW_SCHEMA = 'final-ai-review/v4'
 const FINAL_REVIEW_POLICY_SCHEMA = 'final-ai-policy/v1'
 const DISPOSITION_SCHEMA = 'final-ai-disposition/v1'
-const FINAL_REVIEW_WORKFLOW_PATH =
-  '.github/workflows/check-ocr-final-review.yml'
+// The consuming repository's caller workflow owns the run, its statuses and
+// its Actions API path. The runner exposes it as GITHUB_WORKFLOW_REF
+// (owner/repo/<path>@<ref>), also inside the reusable workflow.
+function callerWorkflowPath(env = process.env) {
+  const prefix = `${env.GITHUB_REPOSITORY ?? ''}/`
+  const ref = env.GITHUB_WORKFLOW_REF ?? ''
+  const at = ref.lastIndexOf('@')
+  const candidate =
+    env.GITHUB_REPOSITORY && ref.startsWith(prefix) && at > prefix.length
+      ? ref.slice(prefix.length, at)
+      : ''
+  return /^\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/.test(candidate)
+    ? candidate
+    : '.github/workflows/final-review.yml'
+}
+const FINAL_REVIEW_WORKFLOW_PATH = callerWorkflowPath()
 const FINAL_REVIEW_CLEAN_STATUS_PREFIX = `${FINAL_REVIEW_MODEL} final review clean; evidence=`
 const FINAL_REVIEW_REQUIRED_DESCRIPTION = `Manual ${FINAL_REVIEW_MODEL} final review required for this head`
 const FINAL_REVIEW_CLEAN_EVIDENCE_SCHEMA = 'final-ai-clean-evidence/v1'
@@ -83,26 +101,14 @@ const OCR_REJECTION_CODES = new Set([
 const FINAL_REVIEW_RULES_PATH =
   '.github/open-code-review/final-review-rules.json'
 const FINAL_STACK_REVIEW_WORKFLOW_PATH =
-  '.github/workflows/check-ocr-final-review.yml'
-const FINAL_STACK_REVIEW_RULES_PATH =
-  '.github/open-code-review/final-stack-topology-rules.json'
-const FINAL_STACK_REVIEW_SCHEMA_PATH =
-  '.github/open-code-review/final-stack-topology-schema.json'
+  '.github/workflows/final-review.yml'
+// Policy that lives in the consuming repository at the trusted commit. The
+// review implementation and rules live in this host repository and enter the
+// digest through OCR_HOST_SHA, so a host upgrade also invalidates old reviews.
 const FINAL_REVIEW_POLICY_PATHS = Object.freeze(
-  [
-    FINAL_REVIEW_RULES_PATH,
-    FINAL_REVIEW_WORKFLOW_PATH,
-    FINAL_STACK_REVIEW_RULES_PATH,
-    FINAL_STACK_REVIEW_SCHEMA_PATH,
-    FINAL_STACK_REVIEW_WORKFLOW_PATH,
-    '.github/scripts/final-ai-review.js',
-    '.github/scripts/final-ai-review-shared.js',
-    '.github/scripts/final-ai-stack-review.js',
-    '.github/scripts/native-stack.js',
-    '.github/scripts/ocr-mistral-adapter.cjs',
-  ].sort()
+  [FINAL_REVIEW_WORKFLOW_PATH, REVIEW_CONFIG_PATH].sort()
 )
-const MISTRAL_TOOL_CANARY_MARKER = 'KLICKER_FINAL_REVIEW_TOOL_CANARY'
+const MISTRAL_TOOL_CANARY_MARKER = 'OCR_FINAL_REVIEW_TOOL_CANARY'
 const MISTRAL_TOOL_CANARY_NAME = 'final_review_probe'
 const MISTRAL_TOOL_CANARY_TIMEOUT_MS = 30_000
 const OCR_MAX_COMPLETION_TOKENS = 16_384
@@ -536,7 +542,8 @@ function buildReviewBackground(title, description) {
 // behavior and acceptance criteria. They are context, not reviewed changes, and
 // share one code-point budget in path order so the earliest-dated plan comes
 // first. Content is read from the immutable head commit.
-function buildPlanContext({ from, to, cwd }) {
+function buildPlanContext({ from, to, cwd, globs = [] }) {
+  if (globs.length === 0) return ''
   const git = (args) =>
     execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 16 << 20 })
   const paths = git([
@@ -547,7 +554,7 @@ function buildPlanContext({ from, to, cwd }) {
     from,
     to,
     '--',
-    ':(glob)project/**/*-plan.md',
+    ...globs.map((glob) => `:(glob)${glob}`),
   ])
     .split('\0')
     .filter(Boolean)
@@ -589,6 +596,17 @@ function buildPlanContext({ from, to, cwd }) {
       omitted_plan_files: paths.length - plans.length,
     }),
   ].join('\n')
+}
+
+// Host rules own the review instructions and default exclusions; the
+// consuming repository's config replaces the include list and adds
+// exclusions for its own layout.
+function buildReviewRules(hostRules, config) {
+  return {
+    ...hostRules,
+    include: [...config.include],
+    exclude: [...new Set([...(hostRules.exclude ?? []), ...config.exclude])],
+  }
 }
 
 function isFinalReviewCommand(body) {
@@ -1087,6 +1105,7 @@ function reviewPolicySettings() {
       individual: FINAL_REVIEW_WORKFLOW_PATH,
       stack: FINAL_STACK_REVIEW_WORKFLOW_PATH,
     },
+    host_sha: process.env.OCR_HOST_SHA ?? null,
   }
 }
 
@@ -1097,7 +1116,14 @@ async function getReviewPolicyDigest({ github, context, trustedSha }) {
   }
   const artifacts = await Promise.all(
     FINAL_REVIEW_POLICY_PATHS.map(async (filePath) => ({
-      content: await getFileText(github, context, filePath, ref),
+      content: await getFileText(github, context, filePath, ref).catch(
+        (error) => {
+          // The review config is optional; every other artifact is required.
+          if (filePath === REVIEW_CONFIG_PATH && error?.status === 404)
+            return null
+          throw error
+        }
+      ),
       path: filePath,
     }))
   )
@@ -3634,6 +3660,28 @@ function runCli() {
     })
     return
   }
+  if (command === 'build-rules') {
+    const outputPath = process.argv[3]
+    if (!outputPath)
+      throw new Error('Usage: final-ai-review.js build-rules <output-path>')
+    const cwd = process.cwd()
+    const policy = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd,
+      encoding: 'utf8',
+    }).trim()
+    const hostRules = JSON.parse(
+      fs.readFileSync(
+        path.join(__dirname, '../..', FINAL_REVIEW_RULES_PATH),
+        'utf8'
+      )
+    )
+    fs.writeFileSync(
+      outputPath,
+      JSON.stringify(buildReviewRules(hostRules, loadReviewConfig(cwd, policy))),
+      { mode: 0o600 }
+    )
+    return
+  }
   if (command === 'plan-context') {
     const from = process.argv[3]
     const to = process.argv[4]
@@ -3642,7 +3690,17 @@ function runCli() {
         'Usage: final-ai-review.js plan-context <from-sha> <to-sha>'
       )
     }
-    const context = buildPlanContext({ from, to, cwd: process.cwd() })
+    const cwd = process.cwd()
+    const policy = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd,
+      encoding: 'utf8',
+    }).trim()
+    const context = buildPlanContext({
+      from,
+      to,
+      cwd,
+      globs: loadReviewConfig(cwd, policy).plan_globs,
+    })
     if (context) console.log(context)
     return
   }
@@ -3781,6 +3839,8 @@ module.exports = {
   buildMistralToolCanaryRequest,
   buildReviewPlan,
   buildPlanContext,
+  buildReviewRules,
+  callerWorkflowPath,
   buildReviewBackground,
   createGhGithub,
   decodeMetadata,

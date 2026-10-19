@@ -68,5 +68,10 @@ Host: `node --test .github/scripts/*.test.*` and `actionlint`. Consumers: live P
 
 ## Progress
 
-- Status: plan drafted, awaiting approval.
-- Next action: on approval, create `uzh-bf/ocr-review` and start slice 1.
+- Execution mode: solo.
+- Slice 1 done: host created; verbatim import at `23ad70d`; config loader and context-root generalization at `d21dfd3`.
+- Slice 2 done: reusable `draft-review.yml` and README caller template at `4563f8a` (pushed to `main`).
+- Slice 3 open: catalyst caller in [uzh-bf/klicker-uzh-catalyst#116](https://github.com/uzh-bf/klicker-uzh-catalyst/pull/116). Live proof waits on org secrets for catalyst and a merge to `main`.
+- Slice 4 done locally: reusable single-PR `final-review.yml`; policy digest covers the caller workflow, `config.json` and the host commit; rules built from host defaults plus consumer filters; stack jobs dropped.
+- Next action: open the host PR for slice 4, then add the catalyst final-review caller and the gbl-uzh and thesis-platform callers.
+- Test delta: added config, context-root, caller-path, rules-merge and caller-template tests; adapted workflow-shape tests to the reusable layout; removed stack-job shape tests.

@@ -54,7 +54,7 @@ const STACK_COMBINED_OCR_SCHEMA = 'final-ai-stack-combined-ocr/v1'
 const STACK_CLEAN_EVIDENCE_SCHEMA = 'final-ai-stack-clean-evidence/v1'
 const STACK_CLEAN_EVIDENCE_CHECK_NAME = 'Final AI stack clean evidence'
 const STACK_REVIEW_WORKFLOW_PATH =
-  '.github/workflows/check-ocr-final-review.yml'
+  '.github/workflows/final-review.yml'
 const STACK_REVIEW_CLEAN_STATUS_PREFIX = `${FINAL_STACK_REVIEW_MODEL} stack review clean; evidence=`
 const STACK_RULES_PATH =
   '.github/open-code-review/final-stack-topology-rules.json'
